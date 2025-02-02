@@ -1,0 +1,69 @@
+close all; clear all; clc; 
+
+%% load fild
+
+addpath ('/Users/jennyshin/Documents/MATLAB/TDTMatlabSDK/TDTSDK/TDTbin2mat');
+
+BLOCKPATH = '/Users/jennyshin/Documents/MATLAB/data files/MEA_23.03.29/test1-230329-100835'
+addpath(BLOCKPATH);
+
+STORE = 'Wav1';
+CHANNEL = 26;
+
+data = TDTbin2mat(BLOCKPATH, 'STORE', STORE, 'CHANNEL', CHANNEL);
+
+%% Extract single channel data
+
+rawdata = data.streams.Wav1
+
+channelnumber = 26;
+channeldata = TDTbin2mat (BLOCKPATH, 'STORE', 'Wav1', 'CHANNEL', channelnumber);
+
+%% time value
+
+fs = data.streams.Wav1.fs;                        %sampling rate
+num_samples = size (data.streams.Wav1.data, 2);   %total # of columns i.e. data points
+total_duration = num_samples / fs;                %in seconds
+time = linspace (0, total_duration, num_samples); %converting to lin vector
+
+%% filtering (lowpass and highpass)
+
+data = TDTdigitalfilter (data, STORE, [1000], 'TYPE', 'low');
+data = TDTdigitalfilter (data, STORE, [50], 'TYPE', 'high');
+
+%% threshold filtering 
+
+threshold = 5;
+
+data_values = data.streams.Wav1.data * 1e6;
+data_mean = mean(data_values);
+data_std = std(data_values);
+
+thresholded_data = data_values(abs(data_values - mean(data_values)) <= threshold*data_std);
+thresholded_time = time(abs(data_values - data_mean) <= threshold*data_std); 
+
+%% Filter
+
+data = TDTdigitalfilter (data, 'Wav1', [10, 100]); %looks at 0-20Hz only
+
+plot(time, data.streams.Wav1.data(1,:));
+
+%iltereddata = TDTfilter (data, 'Freq', 'Time', [-0.1, 0.5]);
+%Wn = [50 1000] / (fs/2);    %cutoff frequencies: 50 Hz and 1000Hz
+                        %fs/2 is used to normalize the cutoff frequencies
+
+%% set time
+
+t1 = 10;
+t2 = 60;
+
+%% plot
+figure;
+plot(thresholded_time, thresholded_data, 'Color', 'k');
+xlim ([t1 t2]);
+ylim ([-100 100]);
+
+xlabel('Time (seconds)');
+ylabel ('uV');
+
+
