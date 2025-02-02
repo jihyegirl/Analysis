@@ -1,0 +1,134 @@
+close all; clear all; clc;
+
+%% load data
+
+%insert blockpath for the whole folder
+BLOCKPATH = '/Volumes/Ultra Touch/Fiber photometry/Subject2-230404-105923';
+data = TDTbin2mat (BLOCKPATH);
+
+GCamp = data.streams.Dv2A.data;
+isobestic = data.streams.Dv1A.data;
+
+%% time calculation
+
+%dividing the indices of the data points by the sampling frequency
+time = (1:length(GCamp)) / data.streams.Dv1A.fs;
+
+plot (time, GCamp); 
+
+
+%% artifact removal
+
+%size of the vector for time, isobestic, GCamp are all the same
+
+%input artifact time to remove (in seconds)
+timeToRemove = 5;
+
+samplesToRemove = round (timeToRemove * data.streams.Dv1A.fs); %Convert time to number of samples
+
+%Remove the corresponding samples from the front
+isobestic = isobestic (samplesToRemove+1:end);
+GCamp = GCamp(samplesToRemove+1:end);
+
+time = time(samplesToRemove+1:end);
+
+%check your plot once here
+%plot (time,GCamp);
+
+%% selected time range
+
+timeA = 20;
+timeB = 50;
+
+% Find indices corresponding to time A and time B
+indexA = find(time >= timeA, 1); % Index of the first time point greater than or equal to timeA
+indexB = find(time <= timeB, 1, 'last'); % Index of the last time point less than or equal to timeB
+
+% Select data from time A to time B
+selectedIsobestic = isobestic(indexA:indexB);
+selectedGCamp = GCamp(indexA:indexB);
+selectedTime = time(indexA:indexB);
+
+%plot (selectedTime, selectedGCamp);
+
+%% linear regression
+
+%coefficientsG = polyfit(selectedTime, selectedGCamp, 1);
+%fittedGCamp = polyval (coefficientsG, selectedTime);
+
+coefficients = polyfit(selectedTime, selectedIsobestic, 1);
+fittedIsobestic = polyval (coefficients, selectedTime);
+
+% Fitting 405 channel onto 465 channel to detrend signal bleaching
+% Scale and fit data
+% Algorithm sourced from Tom Davidson's Github:
+% https://github.com/tjd2002/tjd-shared-code/blob/master/matlab/photometry/FP_normalize.m
+
+bls = polyfit(F405(1:end), F465(1:end), 1);
+Y_fit_all = bls(1) .* F405 + bls(2);
+Y_dF_all = F465 - Y_fit_all;
+
+zall = zeros(size(Y_dF_all));
+for i = 1:size(Y_dF_all,1)
+    ind = ts2(1,:) < BASELINE_PER(2) & ts2(1,:) > BASELINE_PER(1);
+    zb = mean(Y_dF_all(i,ind)); % baseline period mean (-10sec to -6sec)
+    zsd = std(Y_dF_all(i,ind)); % baseline period stdev
+    zall(i,:)=(Y_dF_all(i,:) - zb)/zsd; % Z score per bin
+end
+
+% Standard error of the z-score
+zerror = std(zall)/sqrt(size(zall,1));
+
+% Plot heat map
+subplot(4,1,2)
+
+imagesc(ts2, 1, zall);
+colormap('jet'); % c1 = colorbar;
+title(sprintf('Z-Score Heat Map, %d Trials (%d Artifacts Removed)', numel(data.streams.(STREAM_STORE1).filtered), numArtifacts));
+ylabel('Trials', 'FontSize', 12);
+
+% Fill band values for second subplot. Doing here to scale onset bar
+% correctly
+XX = [ts2, fliplr(ts2)];
+YY = [mean(zall)-zerror, fliplr(mean(zall)+zerror)];
+
+subplot(4,1,3)
+plot(ts2, mean(zall), 'color',[0.8500, 0.3250, 0.0980], 'LineWidth', 3); hold on;
+line([0 0], [min(YY), max(YY)], 'Color', [.7 .7 .7], 'LineWidth', 2)
+
+h = fill(XX, YY, 'r');
+set(h, 'facealpha',.25,'edgecolor','none')
+
+% Finish up the plot
+axis tight
+xlabel('Time, s','FontSize',12)
+ylabel('Z-score', 'FontSize', 12)
+title(sprintf('465 nm Foot Shock Response, %d Trials (%d Artifacts Removed)', numel(data.streams.(STREAM_STORE1).filtered), numArtifacts))
+%c2 = colorbar;
+
+% Quantify changes as area under the curve for cue (-5 sec) and shock (0 sec)
+AUC=[]; % cue, shock
+AUC(1,1)=trapz(mean(zall(:,ts2(1,:) < -3 & ts2(1,:) > -5)));
+AUC(1,2)=trapz(mean(zall(:,ts2(1,:) > 0 & ts2(1,:) < 2)));
+subplot(4,1,4);
+hBar = bar(AUC, 'FaceColor', [.8 .8 .8]);
+
+% Run a two-sample T-Test
+[h,p,ci,stats] = ttest2(mean(zall(:,ts2(1,:) < -3 & ts2(1,:) > -5)),mean(zall(:,ts2(1,:) > 0 & ts2(1,:) < 2)));
+
+
+%% dF/F
+
+%subtract GCamp from the fitted isobestic
+delta_Gcamp_isobestic = selectedGCamp - fittedIsobestic;
+
+%divide by the fitted isobestic
+deltaFoverF = delta_Gcamp_isobestic ./ fittedIsobestic;
+deltaFoverF_scaled = deltaFoverF * 100;
+
+
+plot (selectedTime, deltaFoverF_scaled, 'Color', [0.678, 0.847, 0.902], 'LineWidth', 1);
+xlabel  ('Time (s)');
+ylabel ('ΔF/F (%)');
+
+
